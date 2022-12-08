@@ -2,11 +2,10 @@ import time
 import torch
 import torch.profiler as profiler
 import argparse
-# define A as a matrix 1664*1664
-A = torch.rand(16, 1664, device="cuda")
-# define B as 10 128x128 matrices
-B = torch.rand(10, 128, 128, device="cuda")
-Br = [None] * 10
+# define tensor_x as a matrix 1664*1664
+tensor_x = torch.rand(1664, 1664, device="cuda")
+# define tensors_y as 10 128x128 matrices
+tensors_y = [torch.rand(128, 128, device="cuda") for _ in range(10)]
 activity_groups = [
     profiler.ProfilerActivity.CUDA,
     profiler.ProfilerActivity.CPU,
@@ -15,28 +14,24 @@ nwarmup = 100
 def func_for_profile_mode1():
     # Test A
     for j in range(10):
-        # compute the product of A and B[j]
-        torch.matmul(B[j], B[j])
-    Ar = torch.matmul(A, A)
+        torch.matmul(tensors_y[j], tensors_y[j])
+    Ar = torch.matmul(tensor_x, tensor_x)
     time.sleep(1e-3)
     # Test B
-    Ar = torch.matmul(A, A)
+    Ar = torch.matmul(tensor_x, tensor_x)
     for j in range(10):
-        # compute the product of A and B[j]
-        torch.matmul(B[j], B[j])
+        torch.matmul(tensors_y[j], tensors_y[j])
 
 def func_for_profile_mode2():
     # Test B
-    Ar = torch.matmul(A, A)
+    Ar = torch.matmul(tensor_x, tensor_x)
     for j in range(10):
-        # compute the product of A and B[j]
-        torch.matmul(B[j], B[j])
+        torch.matmul(tensors_y[j], tensors_y[j])
     time.sleep(1e-3)
     # Test A
     for j in range(10):
-        # compute the product of A and B[j]
-        torch.matmul(B[j], B[j])
-    Ar = torch.matmul(A, A)
+        torch.matmul(tensors_y[j], tensors_y[j])
+    Ar = torch.matmul(tensor_x, tensor_x)
 
 
 
@@ -44,49 +39,46 @@ def func_for_execution_time_measurement_mode1():
     # warmup
     for i in range(nwarmup):
         for j in range(10):
-            # compute the product of A and B[j]
-            torch.matmul(B[j], B[j])
+            torch.matmul(tensors_y[j], tensors_y[j])
+        Ar = torch.matmul(tensor_x, tensor_x)
+
     torch.cuda.synchronize()
 
     # Test A
     t0 = time.time_ns()
     for j in range(10):
-        # compute the product of A and B[j]
-        torch.matmul(B[j], B[j])
-    Ar = torch.matmul(A, A)
+        torch.matmul(tensors_y[j], tensors_y[j])
+    Ar = torch.matmul(tensor_x, tensor_x)
     torch.cuda.synchronize()
     t1 = time.time_ns()
-    print("exeuction time for small matrix multiplication: ", (t1 - t0) / 1e6)
+    print("exeuction time for small matrix multiplication: %.4fms" % ((t1 - t0) / 1e6))
 
     torch.cuda.synchronize()
 
     # Test B
-    torch.cuda.synchronize()
     t2 = time.time_ns()
-    Ar = torch.matmul(A, A)
+    Ar = torch.matmul(tensor_x, tensor_x)
     for j in range(10):
-        # compute the product of A and B[j]
-        torch.matmul(B[j], B[j])
+        torch.matmul(tensors_y[j], tensors_y[j])
     torch.cuda.synchronize()
     t3 = time.time_ns()
-    print("exeuction time for big matrix multiplication: ", (t3 - t2) / 1e6)
-    
+    print("exeuction time for large matrix multiplication: %.4fms" %
+          ((t3 - t2) / 1e6))
+
 
 def func_for_execution_time_measurement_mode2():
     # warmup
     for i in range(nwarmup):
         for j in range(10):
-            # compute the product of A and B[j]
-            torch.matmul(B[j], B[j])
+            torch.matmul(tensors_y[j], tensors_y[j])
     torch.cuda.synchronize()
 
     # Test B
     torch.cuda.synchronize()
     t2 = time.time_ns()
-    Ar = torch.matmul(A, A)
+    Ar = torch.matmul(tensor_x, tensor_x)
     for j in range(10):
-        # compute the product of A and B[j]
-        torch.matmul(B[j], B[j])
+        torch.matmul(tensors_y[j], tensors_y[j])
     torch.cuda.synchronize()
     t3 = time.time_ns()
     print("exeuction time for big matrix multiplication: ", (t3 - t2) / 1e6)
@@ -96,9 +88,8 @@ def func_for_execution_time_measurement_mode2():
     # Test A
     t0 = time.time_ns()
     for j in range(10):
-        # compute the product of A and B[j]
-        torch.matmul(B[j], B[j])
-    Ar = torch.matmul(A, A)
+        torch.matmul(tensors_y[j], tensors_y[j])
+    Ar = torch.matmul(tensor_x, tensor_x)
     torch.cuda.synchronize()
     t1 = time.time_ns()
     print("exeuction time for small matrix multiplication: ", (t1 - t0) / 1e6)
