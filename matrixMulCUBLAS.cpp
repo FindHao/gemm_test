@@ -99,11 +99,7 @@ void randomInit(float *data, int size)
 void initializeCUDA(int argc, char **argv, int &devID, int &iSizeMultiple,
                     sMatrixSize &matrix_size)
 {
-  // By default, we use device 0, otherwise we override the device ID based on
-  // what is provided at the command line
   cudaError_t error;
-  // devID = 0;
-  // devID = findCudaDevice(argc, (const char **)argv);
   if (checkCmdLineFlag(argc, (const char **)argv, "sizemult"))
   {
     iSizeMultiple =
@@ -111,16 +107,6 @@ void initializeCUDA(int argc, char **argv, int &devID, int &iSizeMultiple,
   }
   iSizeMultiple = min(iSizeMultiple, 10);
   iSizeMultiple = max(iSizeMultiple, 1);
-  // cudaDeviceProp deviceProp;
-  // error = cudaGetDeviceProperties(&deviceProp, devID);
-  // if (error != cudaSuccess)
-  // {
-  //   printf("cudaGetDeviceProperties returned error code %d, line(%d)\n", error,
-  //          __LINE__);
-  //   exit(EXIT_FAILURE);
-  // }
-  // printf("GPU Device %d: \"%s\" with compute capability %d.%d\n", devID,
-        //  deviceProp.name, deviceProp.major, deviceProp.minor);
   int block_size = 32;
   matrix_size.uiWA = 4 * block_size * iSizeMultiple;
   matrix_size.uiHA = 4 * block_size * iSizeMultiple;
@@ -139,6 +125,103 @@ void initializeCUDA(int argc, char **argv, int &devID, int &iSizeMultiple,
     printf("ERROR: Matrix sizes do not match!\n");
     exit(-1);
   }
+}
+
+float *d_A, *d_B, *d_C;
+float *d_A2, *d_B2, *d_C2;
+
+unsigned int size_C;
+unsigned int mem_size_C;
+// allocate device memory for another test
+unsigned int size_C2;
+unsigned int mem_size_C2;
+
+// allocate host memory for the result
+float *h_C;
+float *h_CUBLAS;
+// allocate host memory for the result of another test
+float *h_C2;
+float *h_CUBLAS2;
+
+// execute the kernel
+int nIter = 10;
+const float alpha = 1.0f;
+const float beta = 0.0f;
+cublasHandle_t handle;
+cudaEvent_t start, stop;
+cudaEvent_t start2, stop2;
+float msecTotal = 0.0f;
+
+int devID = 0, sizeMult;
+sMatrixSize matrix_size;
+sMatrixSize matrix_size2;
+// 1 for test 1, small matrix first
+// 2 for test 2, large matrix first
+int mode = 1;
+
+// Test A: 10 128*128 matrix multiplications, then 1664*1664 matrix multiplications
+void TestA(){
+  checkCudaErrors(cudaDeviceSynchronize());
+  checkCudaErrors(cudaEventCreate(&start));
+  checkCudaErrors(cudaEventCreate(&stop));
+  printf("\n==============\nTest A starts\n");
+  printf("10 128*128 matrix multiplications, then 1664*1664 matrix multiplications\n");
+  // Record the start event
+  checkCudaErrors(cudaEventRecord(start, NULL));
+  for (int j = 0; j < nIter; j++)
+  {
+    // note cublas is column primary!
+    // need to transpose the order
+    checkCudaErrors(cublasSgemm(
+        handle, CUBLAS_OP_N, CUBLAS_OP_N, matrix_size.uiWB, matrix_size.uiHA,
+        matrix_size.uiWA, &alpha, d_B, matrix_size.uiWB, d_A,
+        matrix_size.uiWA, &beta, d_C, matrix_size.uiWB));
+  }
+  // run another test
+  checkCudaErrors(cublasSgemm(
+      handle, CUBLAS_OP_N, CUBLAS_OP_N, matrix_size2.uiWB, matrix_size2.uiHA,
+      matrix_size2.uiWA, &alpha, d_B2, matrix_size2.uiWB, d_A2,
+      matrix_size2.uiWA, &beta, d_C2, matrix_size2.uiWB));
+
+  printf("done.\n");
+  // Record the stop event
+  checkCudaErrors(cudaEventRecord(stop, NULL));
+  // Wait for the stop event to complete
+  checkCudaErrors(cudaEventSynchronize(stop));
+  checkCudaErrors(cudaDeviceSynchronize());
+
+  checkCudaErrors(cudaEventElapsedTime(&msecTotal, start, stop));
+  //  print total time
+  printf("Time= %.3f msec", msecTotal);
+}
+
+// Test B:  1664*1664 matrix multiplications, then 10 128*128 matrix multiplications
+void TestB(){
+  checkCudaErrors(cudaEventCreate(&start2));
+  checkCudaErrors(cudaEventCreate(&stop2));
+  printf("\n==============\nTest B starts\n");
+  printf("1664*1664 matrix multiplications, then 10 128*128 matrix multiplications\n");
+  checkCudaErrors(cudaEventRecord(start2, NULL));
+  checkCudaErrors(cublasSgemm(
+      handle, CUBLAS_OP_N, CUBLAS_OP_N, matrix_size2.uiWB, matrix_size2.uiHA,
+      matrix_size2.uiWA, &alpha, d_B2, matrix_size2.uiWB, d_A2,
+      matrix_size2.uiWA, &beta, d_C2, matrix_size2.uiWB));
+  for (int j = 0; j < nIter; j++)
+  {
+    // note cublas is column primary!
+    // need to transpose the order
+    checkCudaErrors(cublasSgemm(
+        handle, CUBLAS_OP_N, CUBLAS_OP_N, matrix_size.uiWB, matrix_size.uiHA,
+        matrix_size.uiWA, &alpha, d_B, matrix_size.uiWB, d_A,
+        matrix_size.uiWA, &beta, d_C, matrix_size.uiWB));
+  }
+  checkCudaErrors(cudaEventRecord(stop2, NULL));
+  // Wait for the stop event to complete
+  checkCudaErrors(cudaEventSynchronize(stop2));
+  msecTotal = 0.0f;
+  checkCudaErrors(cudaEventElapsedTime(&msecTotal, start2, stop2));
+  //  print total time
+  printf("Time= %.3f msec", msecTotal); // Test round 2:  1664*1664 matrix multiplications, then 10 128*128 matrix multiplications
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -178,20 +261,19 @@ int matrixMultiply(int argc, char **argv, int devID, sMatrixSize &matrix_size, s
   randomInit(h_B2, size_B2);
 
   // allocate device memory
-  float *d_A, *d_B, *d_C;
+
   unsigned int size_C = matrix_size.uiWC * matrix_size.uiHC;
   unsigned int mem_size_C = sizeof(float) * size_C;
   // allocate device memory for another test
-  float *d_A2, *d_B2, *d_C2;
   unsigned int size_C2 = matrix_size2.uiWC * matrix_size2.uiHC;
   unsigned int mem_size_C2 = sizeof(float) * size_C2;
 
   // allocate host memory for the result
-  float *h_C = (float *)malloc(mem_size_C);
-  float *h_CUBLAS = (float *)malloc(mem_size_C);
+  h_C = (float *)malloc(mem_size_C);
+  h_CUBLAS = (float *)malloc(mem_size_C);
   // allocate host memory for the result of another test
-  float *h_C2 = (float *)malloc(mem_size_C2);
-  float *h_CUBLAS2 = (float *)malloc(mem_size_C2);
+  h_C2 = (float *)malloc(mem_size_C2);
+  h_CUBLAS2 = (float *)malloc(mem_size_C2);
 
   checkCudaErrors(cudaMalloc((void **)&d_A, mem_size_A));
   checkCudaErrors(cudaMalloc((void **)&d_B, mem_size_B));
@@ -216,14 +298,7 @@ int matrixMultiply(int argc, char **argv, int devID, sMatrixSize &matrix_size, s
   // create and start timer
   printf("Computing result using CUBLAS...");
 
-  // execute the kernel
-  int nIter = 10;
-  const float alpha = 1.0f;
-  const float beta = 0.0f;
-  cublasHandle_t handle;
-  cudaEvent_t start, stop;
-  cudaEvent_t start2, stop2;
-  float msecTotal = 0.0f;
+
 
   checkCudaErrors(cublasCreate(&handle));
 
@@ -243,68 +318,16 @@ int matrixMultiply(int argc, char **argv, int devID, sMatrixSize &matrix_size, s
   }
   checkCudaErrors(cudaDeviceSynchronize());
 
-  // Test round 2:  1664*1664 matrix multiplications, then 10 128*128 matrix multiplications
-  checkCudaErrors(cudaEventCreate(&start2));
-  checkCudaErrors(cudaEventCreate(&stop2));
-  printf("\n==============\nTest round 2 starts\n");
-  printf("1664*1664 matrix multiplications, then 10 128*128 matrix multiplications\n");
-  checkCudaErrors(cudaEventRecord(start2, NULL));
-  checkCudaErrors(cublasSgemm(
-      handle, CUBLAS_OP_N, CUBLAS_OP_N, matrix_size2.uiWB, matrix_size2.uiHA,
-      matrix_size2.uiWA, &alpha, d_B2, matrix_size2.uiWB, d_A2,
-      matrix_size2.uiWA, &beta, d_C2, matrix_size2.uiWB));
-  for (int j = 0; j < nIter; j++)
-  {
-    // note cublas is column primary!
-    // need to transpose the order
-    checkCudaErrors(cublasSgemm(
-        handle, CUBLAS_OP_N, CUBLAS_OP_N, matrix_size.uiWB, matrix_size.uiHA,
-        matrix_size.uiWA, &alpha, d_B, matrix_size.uiWB, d_A,
-        matrix_size.uiWA, &beta, d_C, matrix_size.uiWB));
+  if (mode == 1){
+    TestA();
+    TestB();
   }
-  checkCudaErrors(cudaEventRecord(stop2, NULL));
-  // Wait for the stop event to complete
-  checkCudaErrors(cudaEventSynchronize(stop2));
-  msecTotal = 0.0f;
-  checkCudaErrors(cudaEventElapsedTime(&msecTotal, start2, stop2));
-  //  print total time
-  printf("Time= %.3f msec", msecTotal); // Test round 2:  1664*1664 matrix multiplications, then 10 128*128 matrix multiplications
-
-
-
-  checkCudaErrors(cudaDeviceSynchronize());
-  checkCudaErrors(cudaEventCreate(&start));
-  checkCudaErrors(cudaEventCreate(&stop));
-  // Test round 1: 10 128*128 matrix multiplications, then 1664*1664 matrix multiplications
-  printf("\n==============\nTest round 1 starts\n");
-  printf("10 128*128 matrix multiplications, then 1664*1664 matrix multiplications\n");
-  // Record the start event
-  checkCudaErrors(cudaEventRecord(start, NULL));
-  for (int j = 0; j < nIter; j++)
-  {
-    // note cublas is column primary!
-    // need to transpose the order
-    checkCudaErrors(cublasSgemm(
-        handle, CUBLAS_OP_N, CUBLAS_OP_N, matrix_size.uiWB, matrix_size.uiHA,
-        matrix_size.uiWA, &alpha, d_B, matrix_size.uiWB, d_A,
-        matrix_size.uiWA, &beta, d_C, matrix_size.uiWB));
+  else if (mode == 2){
+    TestB();
+    TestA();
   }
-  // run another test
-  checkCudaErrors(cublasSgemm(
-      handle, CUBLAS_OP_N, CUBLAS_OP_N, matrix_size2.uiWB, matrix_size2.uiHA,
-      matrix_size2.uiWA, &alpha, d_B2, matrix_size2.uiWB, d_A2,
-      matrix_size2.uiWA, &beta, d_C2, matrix_size2.uiWB));
+  
 
-  printf("done.\n");
-  // Record the stop event
-  checkCudaErrors(cudaEventRecord(stop, NULL));
-  // Wait for the stop event to complete
-  checkCudaErrors(cudaEventSynchronize(stop));
-  checkCudaErrors(cudaDeviceSynchronize());
-                                       
-  checkCudaErrors(cudaEventElapsedTime(&msecTotal, start, stop));
-  //  print total time
-  printf("Time= %.3f msec", msecTotal);
 
 
   // checkCudaErrors(
@@ -332,9 +355,14 @@ int main(int argc, char **argv)
 {
   printf("[Matrix Multiply CUBLAS] - Starting...\n");
 
-  int devID = 0, sizeMult;
-  sMatrixSize matrix_size;
-  sMatrixSize matrix_size2;
+  if (checkCmdLineFlag(argc, (const char **)argv, "mode"))
+  {
+    mode = getCmdLineArgumentInt(argc, (const char **)argv, "mode");
+    // mode 1: small matrix first 
+    // mode 2: large matrix first
+    if (mode != 1 && mode != 2)
+      printf("mode should be 1 or 2");
+  }
   printf("small matrix\n");
   sizeMult = 1;
   // maxtri size is 128*128
